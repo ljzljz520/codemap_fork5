@@ -29,9 +29,20 @@ type Project struct {
 	Files     []FileInfo   `json:"files"`
 	DiffRef   string       `json:"diff_ref,omitempty"`
 	Impact    []ImpactInfo `json:"impact,omitempty"`
-	Depth     int          `json:"depth,omitempty"`   // Max tree depth (0 = unlimited)
-	Only      []string     `json:"only,omitempty"`    // Extension filter (e.g., ["swift", "go"])
-	Exclude   []string     `json:"exclude,omitempty"` // Exclusion patterns (e.g., [".xcassets", "Fonts"])
+	// ImpactTotal is len(Impact) over the whole diff. It is retained even
+	// when Impact holds only the shown subset (--max-changed-files, MCP
+	// structured-output bounds), so display truncation never changes the
+	// reported totals.
+	ImpactTotal int `json:"impact_total,omitempty"`
+	// ImpactKnown distinguishes "impact not computed in this mode" (nil)
+	// from "impact computed from a dependency scan" (true) and "scan
+	// unavailable: impact unknown, not zero" (false).
+	ImpactKnown          *bool    `json:"impact_known,omitempty"`
+	ImpactCoverageStatus string   `json:"impact_coverage_status,omitempty"`
+	ImpactCoverageNotes  []string `json:"impact_coverage_notes,omitempty"`
+	Depth                int      `json:"depth,omitempty"`   // Max tree depth (0 = unlimited)
+	Only                 []string `json:"only,omitempty"`    // Extension filter (e.g., ["swift", "go"])
+	Exclude              []string `json:"exclude,omitempty"` // Exclusion patterns (e.g., [".xcassets", "Fonts"])
 	// DiffTotals describes the whole diff when Files holds only a shown
 	// subset, so a renderer never presents the subset's counts as the total.
 	DiffTotals *DiffTotals `json:"diff_totals,omitempty"`

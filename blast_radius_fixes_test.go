@@ -435,13 +435,16 @@ func TestBlastRadiusSingleScanParity(t *testing.T) {
 	}
 
 	changed := []scanner.FileInfo{{Path: "pkg/hub/hub.go"}}
-	impWrap, err := scanner.AnalyzeImpact(context.Background(), root, changed)
+	impWrap, err := scanner.AnalyzeImpact(context.Background(), root, changed, filters)
 	if err != nil {
 		t.Fatalf("AnalyzeImpact: %v", err)
 	}
-	impInjected := scanner.AnalyzeImpactFromAnalyses(changed, outcome.Analyses)
-	if len(impWrap) != len(impInjected) {
-		t.Fatalf("impact parity mismatch: %v vs %v", impWrap, impInjected)
+	impInjected := scanner.AnalyzeImpactFromGraph(changed, fgInjected)
+	if !reflect.DeepEqual(impWrap.Entries, impInjected.Entries) {
+		t.Fatalf("impact parity mismatch: %+v vs %+v", impWrap.Entries, impInjected.Entries)
+	}
+	if !impWrap.Known || len(impWrap.Entries) == 0 || impWrap.Entries[0].File != "pkg/hub/hub.go" {
+		t.Fatalf("wrapped impact = %+v, want known graph impact keyed by canonical path", impWrap)
 	}
 	for _, importer := range fgInjected.Importers["pkg/hub/hub.go"] {
 		if importer == "c/c.go" {

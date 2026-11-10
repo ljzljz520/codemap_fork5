@@ -251,21 +251,21 @@ func TestImpactInfo(t *testing.T) {
 }
 
 func TestAnalyzeImpactEmpty(t *testing.T) {
-	// Test with empty changed files
-	impacts, err := AnalyzeImpact(context.Background(), ".", nil)
+	// Empty changed files: nothing was asked, so no entries and no error.
+	result, err := AnalyzeImpact(context.Background(), ".", nil, Filters{})
 	if err != nil {
 		t.Fatalf("AnalyzeImpact() error: %v", err)
 	}
-	if impacts != nil {
-		t.Errorf("Expected nil impacts for empty input, got %v", impacts)
+	if len(result.Entries) != 0 {
+		t.Errorf("Expected no entries for empty input, got %v", result.Entries)
 	}
 
-	impacts, err = AnalyzeImpact(context.Background(), ".", []FileInfo{})
+	result, err = AnalyzeImpact(context.Background(), ".", []FileInfo{}, Filters{})
 	if err != nil {
 		t.Fatalf("AnalyzeImpact() error: %v", err)
 	}
-	if impacts != nil {
-		t.Errorf("Expected nil impacts for empty slice, got %v", impacts)
+	if len(result.Entries) != 0 {
+		t.Errorf("Expected no entries for empty slice, got %v", result.Entries)
 	}
 }
 

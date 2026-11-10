@@ -44,12 +44,26 @@ func TestPythonFromImportMemberRegressions(t *testing.T) {
 		}
 	})
 
-	t.Run("diff impact counts an importer once", func(t *testing.T) {
-		changed := []FileInfo{{Path: "pkg/a1.py"}}
-		analyses := []FileAnalysis{{Path: "user.py", Imports: []string{"pkg.a1", "pkg.a2", "pkg.a3", "pkg.a4", "pkg.a5", "pkg.a6"}}}
-		got := AnalyzeImpactFromAnalyses(changed, analyses)
-		if want := []ImpactInfo{{File: "pkg", UsedBy: 1}}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("impact = %+v, want %+v", got, want)
+	t.Run("diff impact counts an importer once at the canonical path", func(t *testing.T) {
+		// Two import spellings ("import pkg.a1" and "from pkg import a1")
+		// resolve to the same file, so they are one graph edge and one
+		// unique importer. The entry key is the canonical file path, not the
+		// directory basename "pkg" that the old matcher produced.
+		graph := falseEdgeGraph(t, map[string]string{
+			"pkg/a1.py": "",
+			"pkg/a2.py": "",
+			"user.py":   "import pkg.a1\nfrom pkg import a1, a2\n",
+		})
+		result := AnalyzeImpactFromGraph([]FileInfo{{Path: "pkg/a1.py"}, {Path: "pkg/a2.py"}}, graph)
+		byPath := make(map[string]ImpactInfo, len(result.Entries))
+		for _, entry := range result.Entries {
+			byPath[entry.File] = entry
+		}
+		for _, path := range []string{"pkg/a1.py", "pkg/a2.py"} {
+			entry, ok := byPath[path]
+			if !ok || entry.UsedBy != 1 || !reflect.DeepEqual(entry.Importers, []string{"user.py"}) {
+				t.Fatalf("impact for %s = %+v (all = %+v), want one unique importer user.py", path, entry, result.Entries)
+			}
 		}
 	})
 

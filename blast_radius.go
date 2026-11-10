@@ -51,17 +51,23 @@ type blastRadiusLimits struct {
 }
 
 type blastRadiusDiff struct {
-	Root              string               `json:"root"`
-	Name              string               `json:"name,omitempty"`
-	Mode              string               `json:"mode"`
-	Files             []scanner.FileInfo   `json:"files"`
-	DiffRef           string               `json:"diff_ref,omitempty"`
-	Impact            []scanner.ImpactInfo `json:"impact,omitempty"`
-	Depth             int                  `json:"depth,omitempty"`
-	Only              []string             `json:"only,omitempty"`
-	Exclude           []string             `json:"exclude,omitempty"`
-	ChangedFilesTotal int                  `json:"changed_files_total"`
-	DiffTotals        *scanner.DiffTotals  `json:"diff_totals,omitempty"`
+	Root    string               `json:"root"`
+	Name    string               `json:"name,omitempty"`
+	Mode    string               `json:"mode"`
+	Files   []scanner.FileInfo   `json:"files"`
+	DiffRef string               `json:"diff_ref,omitempty"`
+	Impact  []scanner.ImpactInfo `json:"impact,omitempty"`
+	// ImpactTotal counts impact entries over the full (uncapped) diff; the
+	// rendered diff panel may show fewer files.
+	ImpactTotal          int                 `json:"impact_total,omitempty"`
+	ImpactKnown          *bool               `json:"impact_known,omitempty"`
+	ImpactCoverageStatus string              `json:"impact_coverage_status,omitempty"`
+	ImpactCoverageNotes  []string            `json:"impact_coverage_notes,omitempty"`
+	Depth                int                 `json:"depth,omitempty"`
+	Only                 []string            `json:"only,omitempty"`
+	Exclude              []string            `json:"exclude,omitempty"`
+	ChangedFilesTotal    int                 `json:"changed_files_total"`
+	DiffTotals           *scanner.DiffTotals `json:"diff_totals,omitempty"`
 }
 
 type blastRadiusDeps struct {
@@ -474,8 +480,17 @@ func buildBlastRadiusBundle(absRoot, ref string, limits blastRadiusLimits) (blas
 	// file graph below. Previously each of those triggered its own full-repo
 	// ScanForDeps, tripling latency on large repositories.
 	var scanOutcome scanner.ScanOutcome
+	var fg *scanner.FileGraph
 	if diffTotal > 0 {
 		scanOutcome, err = scanForDepsOutcomeWithHint(absRoot, filters)
+		if err != nil {
+			return blastRadiusBundle{}, err
+		}
+		// Build the graph once, before the diff project: its impact footer
+		// and every other impact entry point now derive from this same
+		// resolved graph (canonical paths, unique importers, Go package
+		// semantics), never from basename matching over raw import strings.
+		fg, err = scanner.BuildFileGraphFromOutcome(context.Background(), absRoot, scanOutcome, filters)
 		if err != nil {
 			return blastRadiusBundle{}, err
 		}
@@ -487,10 +502,12 @@ func buildBlastRadiusBundle(absRoot, ref string, limits blastRadiusLimits) (blas
 		Mode:    "tree",
 		Files:   changedFiles,
 		DiffRef: ref,
-		Impact:  scanner.AnalyzeImpactFromAnalyses(changedFiles, analyses),
 		Depth:   cfg.Depth,
 		Only:    cfg.Only,
 		Exclude: cfg.Exclude,
+	}
+	if diffTotal > 0 {
+		diffProject.ApplyImpact(scanner.AnalyzeImpactFromGraph(changedFiles, fg))
 	}
 	diffCapped := capBlastRadiusProject(diffProject, limits.MaxChangedFiles)
 
@@ -519,11 +536,6 @@ func buildBlastRadiusBundle(absRoot, ref string, limits blastRadiusLimits) (blas
 			return blastRadiusBundle{}, err
 		}
 		depsTotal = len(depsProject.Files)
-
-		fg, err := scanner.BuildFileGraphFromOutcome(context.Background(), absRoot, scanOutcome, filters)
-		if err != nil {
-			return blastRadiusBundle{}, err
-		}
 
 		// Carry scan provenance into the deps project so a fail-closed scan
 		// never reads as an empty, complete dependency graph.
@@ -565,17 +577,21 @@ func buildBlastRadiusBundle(absRoot, ref string, limits blastRadiusLimits) (blas
 		Ref:     ref,
 		Summary: summary,
 		Diff: blastRadiusDiff{
-			Root:              diffCapped.Root,
-			Name:              diffCapped.Name,
-			Mode:              diffCapped.Mode,
-			Files:             diffCapped.Files,
-			DiffRef:           diffCapped.DiffRef,
-			Impact:            diffCapped.Impact,
-			Depth:             diffCapped.Depth,
-			Only:              diffCapped.Only,
-			Exclude:           diffCapped.Exclude,
-			ChangedFilesTotal: diffTotal,
-			DiffTotals:        diffCapped.DiffTotals,
+			Root:                 diffCapped.Root,
+			Name:                 diffCapped.Name,
+			Mode:                 diffCapped.Mode,
+			Files:                diffCapped.Files,
+			DiffRef:              diffCapped.DiffRef,
+			Impact:               diffCapped.Impact,
+			ImpactTotal:          diffCapped.ImpactTotal,
+			ImpactKnown:          diffCapped.ImpactKnown,
+			ImpactCoverageStatus: diffCapped.ImpactCoverageStatus,
+			ImpactCoverageNotes:  diffCapped.ImpactCoverageNotes,
+			Depth:                diffCapped.Depth,
+			Only:                 diffCapped.Only,
+			Exclude:              diffCapped.Exclude,
+			ChangedFilesTotal:    diffTotal,
+			DiffTotals:           diffCapped.DiffTotals,
 		},
 		Deps: blastRadiusDeps{
 			Root:              depsCapped.Root,
@@ -611,34 +627,17 @@ func capBlastRadiusProject(project scanner.Project, max int) scanner.Project {
 	}
 	project.DiffTotals = totals
 	project.Files = append([]scanner.FileInfo(nil), project.Files[:max]...)
-	// Impact is an independent, usage-sorted list keyed by basename; filter it to
-	// the files actually shown rather than slicing it by the changed-file cap,
-	// which would drop or mis-attribute the diff impact footer.
-	project.Impact = filterImpactToShownFiles(project.Impact, project.Files)
+	// Impact entries are keyed by canonical path from the resolved graph;
+	// filter by exact shown paths rather than basename or directory, so two
+	// same-named files in different directories never leak each other's
+	// entries into the footer. ImpactTotal (set before capping) keeps the
+	// whole-diff count, and every retained entry keeps its full UsedBy.
+	shown := make(map[string]bool, len(project.Files))
+	for _, f := range project.Files {
+		shown[filepath.ToSlash(filepath.Clean(f.Path))] = true
+	}
+	project.Impact = scanner.FilterImpactEntries(project.Impact, shown)
 	return project
-}
-
-// filterImpactToShownFiles keeps only impact entries whose basename matches a
-// shown changed file (or its directory, for package-style imports).
-func filterImpactToShownFiles(impact []scanner.ImpactInfo, files []scanner.FileInfo) []scanner.ImpactInfo {
-	if len(impact) == 0 {
-		return impact
-	}
-	allowed := make(map[string]bool, len(files)*2)
-	for _, f := range files {
-		allowed[filepath.Base(f.Path)] = true
-		dir := filepath.Dir(f.Path)
-		if dir != "." && dir != "" {
-			allowed[filepath.Base(dir)] = true
-		}
-	}
-	var filtered []scanner.ImpactInfo
-	for _, imp := range impact {
-		if allowed[imp.File] {
-			filtered = append(filtered, imp)
-		}
-	}
-	return filtered
 }
 
 // filterDepsToFiles keeps the analyses for exactly the given changed files,

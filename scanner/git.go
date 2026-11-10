@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -205,113 +204,6 @@ func FilterAnalysisToChanged(files []FileAnalysis, changed map[string]bool) []Fi
 	return result
 }
 
-// ImpactInfo describes which changed files are used by other files
-type ImpactInfo struct {
-	File   string // the file that changed
-	UsedBy int    // number of other files that import/use this file
-}
-
-// AnalyzeImpact analyzes which changed files are imported by other files,
-// honoring caller cancellation. Uses ast-grep to extract actual imports.
-func AnalyzeImpact(ctx context.Context, root string, changedFiles []FileInfo) ([]ImpactInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(changedFiles) == 0 {
-		return nil, nil
-	}
-
-	// Scan all files to get their imports using ast-grep
-	outcome, err := ScanForDeps(ctx, root, ConfiguredFilters(root))
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, nil
-	}
-	return AnalyzeImpactFromAnalyses(changedFiles, outcome.Analyses), ctx.Err()
-}
-
-// AnalyzeImpactFromAnalyses computes impact using a pre-computed ast-grep scan,
-// so callers that already hold the analyses can avoid a redundant full-repo
-// ScanForDeps. AnalyzeImpact is the convenience wrapper that performs the scan.
-func AnalyzeImpactFromAnalyses(changedFiles []FileInfo, analyses []FileAnalysis) []ImpactInfo {
-	if len(changedFiles) == 0 {
-		return nil
-	}
-
-	// Build set of changed file base names and directories
-	changedBases := make(map[string]string) // base name -> full path
-	changedDirs := make(map[string]string)  // dir name -> representative file
-	for _, f := range changedFiles {
-		base := strings.TrimSuffix(filepath.Base(f.Path), filepath.Ext(f.Path))
-		changedBases[base] = f.Path
-
-		// Also track directories for Go-style package imports
-		dir := filepath.Dir(f.Path)
-		if dir != "." && dir != "" {
-			dirBase := filepath.Base(dir)
-			if _, exists := changedDirs[dirBase]; !exists {
-				changedDirs[dirBase] = f.Path
-			}
-		}
-	}
-
-	usageCounts := make(map[string]int)
-	for _, analysis := range analyses {
-		// One importer counts once per target: "from pkg import a, b" is two
-		// import specs that both reduce to "pkg".
-		counted := make(map[string]bool)
-		count := func(target string) {
-			if !counted[target] {
-				counted[target] = true
-				usageCounts[target]++
-			}
-		}
-		// Check each import to see if it references a changed file
-		for _, imp := range analysis.impactImports() {
-			// Extract the last component of the import path
-			impBase := filepath.Base(imp)
-			impBase = strings.TrimSuffix(impBase, filepath.Ext(impBase))
-
-			// Check if this import matches a changed file (by filename)
-			if changedPath, ok := changedBases[impBase]; ok {
-				if analysis.Path != changedPath {
-					count(changedPath)
-				}
-			}
-
-			// Also check if import matches a changed directory (Go packages)
-			if changedPath, ok := changedDirs[impBase]; ok {
-				changedDir := filepath.Dir(changedPath)
-				if filepath.Dir(analysis.Path) != changedDir {
-					count(changedDir + "/")
-				}
-			}
-		}
-	}
-
-	// Usage count descending, then full path ascending. usageCounts is a map,
-	// and a sort on count alone left equal counts in map order, so the diff
-	// impact footer and blast-radius JSON reordered between identical runs
-	// and an output budget then showed a different subset each time. The
-	// tie-break is the full path, not the rendered basename, so two changed
-	// files with the same name in different directories still order the same.
-	paths := make([]string, 0, len(usageCounts))
-	for file, count := range usageCounts {
-		if count > 0 {
-			paths = append(paths, file)
-		}
-	}
-	sort.Slice(paths, func(i, j int) bool {
-		if usageCounts[paths[i]] != usageCounts[paths[j]] {
-			return usageCounts[paths[i]] > usageCounts[paths[j]]
-		}
-		return paths[i] < paths[j]
-	})
-	impacts := make([]ImpactInfo, 0, len(paths))
-	for _, file := range paths {
-		impacts = append(impacts, ImpactInfo{File: filepath.Base(file), UsedBy: usageCounts[file]})
-	}
-	return impacts
-}
+// Diff impact types and analysis live in impact.go: the plain diff view, the
+// MCP get_diff result and blast-radius all build impact from one resolved
+// FileGraph, keyed by canonical path rather than file/directory basenames.

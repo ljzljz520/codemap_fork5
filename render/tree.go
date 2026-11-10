@@ -240,15 +240,47 @@ func Tree(w io.Writer, project scanner.Project) {
 	fmt.Fprintf(w, "%s%s%s\n", Bold, projectName, Reset)
 	printTreeNode(w, root, "", true, topLarge, 1, maxDepth)
 
-	// Print impact footer for diff mode
-	if isDiffMode && len(project.Impact) > 0 {
+	// Print impact footer for diff mode. Impact comes from one resolved
+	// FileGraph (canonical paths, unique-importer counts, Go package
+	// granularity). ImpactKnown == nil means impact was not computed in this
+	// mode; false means the dependency scan was unavailable, which must read
+	// as "unknown" rather than as zero dependents.
+	if isDiffMode && project.ImpactKnown != nil {
 		fmt.Fprintln(w)
-		for _, imp := range project.Impact {
-			files := "files"
-			if imp.UsedBy == 1 {
-				files = "file"
+		switch {
+		case !*project.ImpactKnown:
+			fmt.Fprintf(w, "%s⚠ Impact unknown: no dependency scan was available", Yellow)
+			if len(project.ImpactCoverageNotes) > 0 {
+				fmt.Fprintf(w, " (%s)", strings.Join(project.ImpactCoverageNotes, "; "))
 			}
-			fmt.Fprintf(w, "%s⚠ %s is used by %d other %s%s\n", Yellow, imp.File, imp.UsedBy, files, Reset)
+			fmt.Fprintf(w, "%s\n", Reset)
+		case len(project.Impact) > 0:
+			for _, imp := range project.Impact {
+				word := "files"
+				if imp.UsedBy == 1 {
+					word = "file"
+				}
+				suffix := ""
+				if imp.Granularity == scanner.ImpactGranularityPackage {
+					if imp.Package != "" {
+						suffix = fmt.Sprintf(" (Go package %s: imports name packages, not files)", imp.Package)
+					} else {
+						suffix = " (Go package granularity)"
+					}
+				}
+				fmt.Fprintf(w, "%s⚠ %s is used by %d other %s%s%s\n", Yellow, imp.File, imp.UsedBy, word, suffix, Reset)
+			}
+			// Impact may be a display subset (--max-changed-files, MCP
+			// bounds); counts per line are still the full totals, and
+			// ImpactTotal says how many entries the whole diff produced.
+			if omitted := project.ImpactTotal - len(project.Impact); omitted > 0 {
+				word := "changed files"
+				if omitted == 1 {
+					word = "changed file"
+				}
+				fmt.Fprintf(w, "%s⚠ %d more %s with dependents omitted from display (%d of %d shown)%s\n",
+					Yellow, omitted, word, len(project.Impact), project.ImpactTotal, Reset)
+			}
 		}
 	}
 }

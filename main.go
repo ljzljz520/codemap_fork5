@@ -555,12 +555,14 @@ func main() {
 		scanBound = &scanner.ScanBound{Scanned: len(files), Total: totalFiles, Limit: limits.ScanFileBound(*maxFiles)}
 	}
 
-	// Filter to changed files if --diff specified (with diff info annotations)
-	var impact []scanner.ImpactInfo
+	// Filter to changed files if --diff specified (with diff info annotations).
+	// Impact is derived from the same resolved FileGraph the deps and
+	// blast-radius views use, keyed by canonical path.
+	var impactResult scanner.ImpactResult
 	var activeDiffRef string
 	if diffInfo != nil {
 		files = scanner.FilterToChangedWithInfo(files, diffInfo)
-		impact, err = scanner.AnalyzeImpact(context.Background(), absRoot, files)
+		impactResult, err = scanner.AnalyzeImpact(context.Background(), absRoot, files, filters)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error analyzing impact: %v\n", err)
 			os.Exit(1)
@@ -576,11 +578,15 @@ func main() {
 		Animate:   *animateMode,
 		Files:     files,
 		DiffRef:   activeDiffRef,
-		Impact:    impact,
 		Depth:     *depthLimit,
 		Only:      only,
 		Exclude:   exclude,
 		ScanBound: scanBound,
+	}
+	if diffInfo != nil {
+		// Even when the scan was unavailable the result is applied: Known
+		// false renders "impact unknown" rather than silently showing zero.
+		project.ApplyImpact(impactResult)
 	}
 
 	// Render or output JSON

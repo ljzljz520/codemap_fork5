@@ -210,7 +210,7 @@ exec sleep 10
 func TestAnalyzeImpactContextPreCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := AnalyzeImpact(ctx, t.TempDir(), []FileInfo{{Path: "changed.go"}})
+	_, err := AnalyzeImpact(ctx, t.TempDir(), []FileInfo{{Path: "changed.go"}}, Filters{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("AnalyzeImpact error = %v, want context.Canceled", err)
 	}

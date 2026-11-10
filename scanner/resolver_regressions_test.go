@@ -247,12 +247,20 @@ func TestEvidencePastSizeCapReadsPartial(t *testing.T) {
 }
 
 func TestDiffImpactSeesDynamicShellImports(t *testing.T) {
-	impact := AnalyzeImpactFromAnalyses(
-		[]FileInfo{{Path: "lib/b.sh"}},
-		[]FileAnalysis{{Path: "a.sh", Language: "bash", References: []ImportReference{{Path: "${DIR}/lib/b.sh", Kind: bashDynamicImport}}}},
-	)
-	if len(impact) != 1 || impact[0].UsedBy != 1 {
-		t.Fatalf("impact = %+v, want one use of b.sh", impact)
+	// The resolver reduces "${DIR}/lib/b.sh" to the literal remainder and
+	// links the edge, so graph-derived impact sees dynamic shell imports and
+	// reports them against the canonical changed path.
+	graph := falseEdgeGraph(t, map[string]string{
+		"a.sh":     "DIR=.\nsource \"${DIR}/lib/b.sh\"\n",
+		"lib/b.sh": "x=1\n",
+	})
+	result := AnalyzeImpactFromGraph([]FileInfo{{Path: "lib/b.sh"}}, graph)
+	if len(result.Entries) != 1 {
+		t.Fatalf("impact = %+v, want one entry", result.Entries)
+	}
+	entry := result.Entries[0]
+	if entry.File != "lib/b.sh" || entry.UsedBy != 1 || len(entry.Importers) != 1 || entry.Importers[0] != "a.sh" {
+		t.Fatalf("impact = %+v, want canonical lib/b.sh used once by a.sh", entry)
 	}
 }
 

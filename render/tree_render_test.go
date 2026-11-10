@@ -27,8 +27,12 @@ func TestTreeRendersDiffModeRemoteAndImpact(t *testing.T) {
 			{Path: "src/app/new.go", Ext: ".go", Size: 80, Added: 5, IsNew: true},
 			{Path: "README.md", Ext: ".md", Size: 30},
 		},
-		Impact: []scanner.ImpactInfo{{File: "src/app/main.go", UsedBy: 1}},
 	}
+	project.ApplyImpact(scanner.ImpactResult{
+		Known:          true,
+		CoverageStatus: "complete",
+		Entries:        []scanner.ImpactInfo{{File: "src/app/main.go", UsedBy: 1, Granularity: scanner.ImpactGranularityPackage, Package: "example.com/app"}},
+	})
 
 	var buf bytes.Buffer
 	Tree(&buf, project)
@@ -126,5 +130,60 @@ func TestTreeKeepsExtensionsRegardlessOfSiblingCount(t *testing.T) {
 		if !strings.Contains(out, name) {
 			t.Fatalf("expected %q in tree output, got:\n%s", name, out)
 		}
+	}
+}
+
+// An unavailable dependency scan renders as "impact unknown" instead of an
+// empty footer that would read as zero dependents.
+func TestTreeImpactFooterUnknown(t *testing.T) {
+	project := scanner.Project{
+		Name:    "demo",
+		Root:    t.TempDir(),
+		DiffRef: "main",
+		Files:   []scanner.FileInfo{{Path: "a.go", Ext: ".go", Size: 10}},
+	}
+	project.ApplyImpact(scanner.ImpactResult{
+		Known:          false,
+		CoverageStatus: "unavailable",
+		CoverageNotes:  []string{"dependency scan did not run: ast-grep not found"},
+	})
+	var buf bytes.Buffer
+	Tree(&buf, project)
+	out := stripTreeANSI(buf.String())
+	if !strings.Contains(out, "Impact unknown") || !strings.Contains(out, "ast-grep not found") {
+		t.Fatalf("footer = %q, want an explicit unknown line with the reason", out)
+	}
+	if strings.Contains(out, "is used by") {
+		t.Fatalf("footer = %q, must not invent counts when unknown", out)
+	}
+}
+
+// A display subset keeps the shown entries' full counts and discloses how
+// many impact entries were omitted.
+func TestTreeImpactFooterOmissionNote(t *testing.T) {
+	project := scanner.Project{
+		Name:    "demo",
+		Root:    t.TempDir(),
+		DiffRef: "main",
+		Files:   []scanner.FileInfo{{Path: "a.ts", Ext: ".ts", Size: 10}},
+	}
+	project.ApplyImpact(scanner.ImpactResult{
+		Known: true,
+		Entries: []scanner.ImpactInfo{
+			{File: "a.ts", UsedBy: 7},
+			{File: "b.ts", UsedBy: 1},
+			{File: "c.ts", UsedBy: 1},
+		},
+	})
+	// Display keeps only the first two entries; the total must stay 3.
+	project.Impact = project.Impact[:2]
+	var buf bytes.Buffer
+	Tree(&buf, project)
+	out := stripTreeANSI(buf.String())
+	if !strings.Contains(out, "a.ts is used by 7 other files") {
+		t.Fatalf("footer = %q, want full count for shown entry", out)
+	}
+	if !strings.Contains(out, "1 more changed file with dependents omitted from display (2 of 3 shown)") {
+		t.Fatalf("footer = %q, want omission note", out)
 	}
 }

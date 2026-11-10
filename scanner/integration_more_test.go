@@ -71,12 +71,22 @@ func TestScanForDepsBuildFileGraphAndAnalyzeImpact(t *testing.T) {
 		t.Fatal("expected pkg/types/types.go to be detected as a hub")
 	}
 
-	impacts, err := AnalyzeImpact(context.Background(), root, []FileInfo{{Path: "pkg/types/types.go"}})
+	impactResult, err := AnalyzeImpact(context.Background(), root, []FileInfo{{Path: "pkg/types/types.go"}}, ConfiguredFilters(root))
 	if err != nil {
 		t.Fatalf("AnalyzeImpact() error: %v", err)
 	}
+	impacts := impactResult.Entries
 	if len(impacts) == 0 {
 		t.Fatal("expected AnalyzeImpact to report at least one impacted file")
+	}
+	if impacts[0].File != "pkg/types/types.go" {
+		t.Fatalf("impact entry key = %q, want canonical path pkg/types/types.go", impacts[0].File)
+	}
+	if impacts[0].Granularity != ImpactGranularityPackage || impacts[0].Package != "example.com/demo/pkg/types" {
+		t.Fatalf("impact entry = %+v, want Go package granularity for example.com/demo/pkg/types", impacts[0])
+	}
+	if !impactResult.Known || impactResult.CoverageStatus != analysis.CoverageComplete {
+		t.Fatalf("impact coverage = known=%v status=%q, want known/complete", impactResult.Known, impactResult.CoverageStatus)
 	}
 
 	maxUsedBy := 0

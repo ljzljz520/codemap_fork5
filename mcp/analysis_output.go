@@ -63,7 +63,17 @@ func boundedProject(project scanner.Project) (scanner.Project, int) {
 	bounded := project
 	var omittedCount int
 	bounded.Files, omittedCount = boundedSlice(project.Files)
-	bounded.Impact, omittedCount = addBounded(project.Impact, omittedCount)
+	boundedImpact, impactOmitted := boundedSlice(project.Impact)
+	omittedCount += impactOmitted
+	// Bound each entry's importer list for the structured payload. The
+	// UsedBy field and project.ImpactTotal already carry the full totals, so
+	// payload truncation never rewrites the statistics.
+	for i := range boundedImpact {
+		if len(boundedImpact[i].Importers) > maxStructuredItems {
+			boundedImpact[i].Importers = append([]string(nil), boundedImpact[i].Importers[:maxStructuredItems]...)
+		}
+	}
+	bounded.Impact = boundedImpact
 	return bounded, omittedCount
 }
 

@@ -595,6 +595,7 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 		return invalid, nil, nil
 	}
 
+	filters := scanner.ConfiguredFilters(absRoot)
 	diffInfo, err := scanner.GitDiffInfo(ctx, absRoot, ref)
 	if err != nil {
 		if cancelled := cancellationResult(ctx, "Diff analysis"); cancelled != nil {
@@ -617,7 +618,10 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 	}
 
 	files = scanner.FilterToChangedWithInfo(files, diffInfo)
-	impact, err := scanner.AnalyzeImpact(ctx, absRoot, files)
+	// Impact is graph-derived like the CLI diff and blast-radius: canonical
+	// paths, unique-importer counts. An unavailable scan comes back as
+	// Known=false (rendered "unknown"), not as a hard error.
+	impactResult, err := scanner.AnalyzeImpact(ctx, absRoot, files, filters)
 	if err != nil {
 		if cancelled := cancellationResult(ctx, "Impact analysis"); cancelled != nil {
 			return cancelled, nil, nil
@@ -630,8 +634,8 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 		Mode:    "tree",
 		Files:   files,
 		DiffRef: ref,
-		Impact:  impact,
 	}
+	project.ApplyImpact(impactResult)
 
 	var buf bytes.Buffer
 	render.Tree(&buf, project)
